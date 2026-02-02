@@ -102,25 +102,27 @@ class MiElHVACTasmota(ClimateEntity, RestoreEntity):
         
         # Entity configuration
         self._attr_unique_id = f"{self._device_id}_climate"
-        self._attr_name = "Climate"
-        self._attr_has_entity_name = True
+        self._attr_has_entity_name = False
+        self._attr_name = f"{self._device_id.replace('tasmota_', '').upper()} Climate"
         
         # Find existing Tasmota device and use its identifiers
         device_registry = dr.async_get(hass)
         existing_device = None
+        device_name = None
         
         # Search for device with matching topic
         for device in device_registry.devices.values():
             for identifier in device.identifiers:
                 if identifier[0] == "tasmota" and identifier[1] == self._device_id:
                     existing_device = device
+                    device_name = device.name or device.name_by_user or self._device_id
                     break
             if existing_device:
                 break
         
         if existing_device:
             # Attach to existing Tasmota device using exact same identifiers
-            _LOGGER.info("Attaching climate to existing device: %s", existing_device.name)
+            _LOGGER.info("Attaching climate to existing device: %s", device_name)
             self._attr_device_info = {
                 "identifiers": existing_device.identifiers,
             }
@@ -130,6 +132,7 @@ class MiElHVACTasmota(ClimateEntity, RestoreEntity):
                 "Tasmota device %s not found in registry, creating standalone climate entity",
                 self._device_id
             )
+            device_name = self._device_id
             # Fallback: create minimal device info
             self._attr_device_info = {
                 "identifiers": {("tasmota", self._device_id)},
@@ -137,6 +140,10 @@ class MiElHVACTasmota(ClimateEntity, RestoreEntity):
                 "manufacturer": "Tasmota",
                 "model": "MiElHVAC",
             }
+        
+        # Set entity name based on device name
+        self._attr_name = f"{device_name} Climate"
+        self._attr_has_entity_name = False
         
         # Temperature configuration
         self._attr_temperature_unit = UnitOfTemperature.CELSIUS
