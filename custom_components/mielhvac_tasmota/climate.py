@@ -100,79 +100,66 @@ class MiElHVACTasmota(ClimateEntity, RestoreEntity):
         self._topic_cmd_swing_h = f"cmnd/{self._base_topic}/HVACSetSwingH"
         self._topic_cmd_fan = f"cmnd/{self._base_topic}/HVACSetFanSpeed"
         
-        # Find existing Tasmota device first to get proper name
+        # Find existing Tasmota device by looking for related entities
         device_registry = dr.async_get(hass)
+        from homeassistant.helpers import entity_registry as er
+        entity_reg = er.async_get(hass)
+        
         existing_device = None
         
         _LOGGER.info("=" * 60)
-        _LOGGER.info("Searching for Tasmota device with topic ID: %s", self._device_id)
+        _LOGGER.info("Searching for device with topic: %s", self._device_id)
         
-        # Log ALL Tasmota devices for debugging (check all domains)
-        tasmota_devices_found = []
-        for device in device_registry.devices.values():
-            # Check all identifiers, not just "tasmota" domain
-            has_tasmota = False
-            for identifier in device.identifiers:
-                if "tasmota" in str(identifier).lower():
-                    has_tasmota = True
-                    break
-            
-            if has_tasmota or (device.name and "tasmota" in device.name.lower()):
-                tasmota_devices_found.append({
-                    "name": device.name,
-                    "name_by_user": device.name_by_user,
-                    "all_identifiers": list(device.identifiers),
-                    "config_entries": list(device.config_entries)
-                })
+        # Extract the topic part (e.g., "wPac1" from "tasmota_wPac1")
+        topic_short = self._device_id.replace("tasmota_", "")
         
-        _LOGGER.info("Found %d Tasmota-related devices:", len(tasmota_devices_found))
-        for dev in tasmota_devices_found:
-            _LOGGER.info("  Device: %s", dev["name"])
-            _LOGGER.info("    User Name: %s", dev["name_by_user"])
-            _LOGGER.info("    Identifiers: %s", dev["all_identifiers"])
-            _LOGGER.info("    Config Entries: %s", dev["config_entries"])
-        
-        # Try to find device by checking if topic appears in device name or identifiers
+        # Search for entities that match our topic
+        # Look for entity_ids like: sensor.wpac_1_*, sensor.wPac1_*, etc.
         search_patterns = [
-            self._device_id,  # tasmota_wPac1
-            self._device_id.replace("tasmota_", ""),  # wPac1
-            self._device_id.replace("_", " "),  # tasmota wPac1
-            self._device_id.replace("tasmota_", "").replace("_", " "),  # wPac 1
+            topic_short.lower(),  # wpac1
+            topic_short.lower().replace("w", "w_"),  # w_pac1
+            topic_short.replace("_", " ").lower(),  # wpac 1
         ]
         
-        _LOGGER.info("Trying to match with patterns: %s", search_patterns)
+        _LOGGER.info("Searching for entities matching patterns: %s", search_patterns)
         
-        # Search in multiple ways
-        for device in device_registry.devices.values():
-            # Method 1: Check identifier domain and value
-            for identifier in device.identifiers:
-                if identifier[0] == "tasmota":
-                    for pattern in search_patterns:
-                        if pattern.lower() in identifier[1].lower():
-                            existing_device = device
-                            _LOGGER.info("✓ MATCH by identifier! Pattern: %s, Device: %s", pattern, device.name)
-                            break
-                if existing_device:
+        matching_entities = []
+        for entity in entity_reg.entities.values():
+            entity_id_lower = entity.entity_id.lower()
+            # Check if entity_id contains our topic patterns
+            for pattern in search_patterns:
+                if pattern in entity_id_lower:
+                    matching_entities.append({
+                        "entity_id": entity.entity_id,
+                        "device_id": entity.device_id,
+                        "platform": entity.platform,
+                    })
                     break
-            
-            # Method 2: Check device name
-            if not existing_device and device.name:
-                for pattern in search_patterns:
-                    if pattern.lower() in device.name.lower():
-                        # Verify it's actually a Tasmota device
-                        for identifier in device.identifiers:
-                            if identifier[0] == "tasmota":
-                                existing_device = device
-                                _LOGGER.info("✓ MATCH by name! Pattern: %s, Device: %s", pattern, device.name)
-                                break
-                        if existing_device:
-                            break
+        
+        _LOGGER.info("Found %d entities matching our topic:", len(matching_entities))
+        for ent in matching_entities[:5]:  # Log first 5
+            _LOGGER.info("  - %s (platform: %s, device: %s)", 
+                        ent["entity_id"], ent["platform"], ent["device_id"])
+        
+        # Find the device that has the most matching entities
+        device_entity_count = {}
+        for ent in matching_entities:
+            if ent["device_id"]:
+                device_entity_count[ent["device_id"]] = device_entity_count.get(ent["device_id"], 0) + 1
+        
+        if device_entity_count:
+            # Get device with most entities
+            best_device_id = max(device_entity_count, key=device_entity_count.get)
+            existing_device = device_registry.devices.get(best_device_id)
             
             if existing_device:
-                break
+                _LOGGER.info("✓ MATCH by entities! Device: %s (%d matching entities)",
+                            existing_device.name or existing_device.name_by_user,
+                            device_entity_count[best_device_id])
+                _LOGGER.info("  Device identifiers: %s", list(existing_device.identifiers))
         
         if not existing_device:
-            _LOGGER.warning("✗ NO MATCH - Device not found in registry")
+            _LOGGER.warning("✗ NO MATCH - Device not found")
         
         _LOGGER.info("=" * 60)
         
