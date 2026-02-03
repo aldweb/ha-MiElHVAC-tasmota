@@ -1,6 +1,6 @@
 """
 Tasmota MiElHVAC integration for Home Assistant.
-Auto-discovers HVAC devices via MQTT.
+Auto-discovers HVAC devices via MQTT SENSOR messages.
 """
 from __future__ import annotations
 import logging
@@ -16,8 +16,8 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 DOMAIN = "tasmota_mielhvac"
 PLATFORMS = [Platform.CLIMATE]
 
+# Listen to SENSOR topic to detect MiElHVAC devices
 DISCOVERY_TOPIC = "tele/+/SENSOR"
-DATA_DISCOVERY = "mielhvac_discovery"
 SIGNAL_HVAC_DISCOVERED = f"{DOMAIN}_hvac_discovered"
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,8 +33,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     # Start MQTT discovery
     @callback
-    async def hvac_message_received(msg):
-        """Handle HVAC settings messages for discovery."""
+    async def sensor_message_received(msg):
+        """Handle SENSOR messages for MiElHVAC discovery."""
         try:
             # Parse topic to extract device ID
             # Topic format: tele/{device_id}/SENSOR
@@ -48,13 +48,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             try:
                 payload = json.loads(msg.payload)
             except json.JSONDecodeError:
-                _LOGGER.debug("Invalid JSON from %s", device_id)
                 return
             
-            # Validate it's a valid HVAC message
-            # Must have at least HAMode and Temp
-            if "HAMode" not in payload or "Temp" not in payload:
-                _LOGGER.debug("Not a valid HVAC message from %s", device_id)
+            # Check if this is a MiElHVAC device
+            # Look for MiElHVAC key in the payload
+            if "MiElHVAC" not in payload:
+                return
+            
+            # Validate it has Temperature (minimum requirement)
+            mielhvac_data = payload.get("MiElHVAC", {})
+            if "Temperature" not in mielhvac_data:
+                _LOGGER.debug("MiElHVAC found in %s but no Temperature", device_id)
                 return
             
             # Check if already discovered
@@ -62,7 +66,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if device_id in discovered:
                 return
             
-            _LOGGER.info("Discovered HVAC device: %s", device_id)
+            _LOGGER.info("🎯 Discovered MiElHVAC device: %s (Temperature: %s°C)", 
+                        device_id, mielhvac_data.get("Temperature"))
             
             # Mark as discovered
             discovered[device_id] = {
@@ -78,17 +83,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             
         except Exception as err:
-            _LOGGER.error("Error processing HVAC discovery: %s", err)
+            _LOGGER.error("Error processing MiElHVAC discovery: %s", err)
     
-    # Subscribe to discovery topic
+    # Subscribe to SENSOR topic
     unsub = await mqtt.async_subscribe(
         hass,
         DISCOVERY_TOPIC,
-        hvac_message_received,
+        sensor_message_received,
         qos=1,
     )
     
     hass.data[DOMAIN][entry.entry_id]["unsub"] = unsub
+    
+    _LOGGER.info("Listening for MiElHVAC devices on topic: %s", DISCOVERY_TOPIC)
     
     # Forward to climate platform
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
