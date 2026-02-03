@@ -16,7 +16,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 DOMAIN = "tasmota_mielhvac"
 PLATFORMS = [Platform.CLIMATE]
 
-DISCOVERY_TOPIC = "tele/+/HVACSETTINGS"
+DISCOVERY_TOPIC = "tele/+/SENSOR"
 DATA_DISCOVERY = "mielhvac_discovery"
 SIGNAL_HVAC_DISCOVERED = f"{DOMAIN}_hvac_discovered"
 
@@ -37,8 +37,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         """Handle HVAC settings messages for discovery."""
         try:
             # Parse topic to extract device ID
-            # Topic format: tele/{device_id}/HVACSETTINGS
-            match = re.match(r"tele/([^/]+)/HVACSETTINGS", msg.topic)
+            # Topic format: tele/{device_id}/SENSOR
+            match = re.match(r"tele/([^/]+)/SENSOR", msg.topic)
             if not match:
                 return
             
