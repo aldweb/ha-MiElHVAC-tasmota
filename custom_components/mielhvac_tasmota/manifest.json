@@ -1,5 +1,5 @@
 {
-  "domain": "mielhvac_tasmota",
+  "domain": "tasmota_mielhvac",
   "name": "Tasmota MiElHVAC",
   "codeowners": ["@aldweb"],
   "config_flow": true,
