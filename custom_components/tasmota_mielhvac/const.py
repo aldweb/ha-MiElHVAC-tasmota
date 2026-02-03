@@ -3,7 +3,7 @@ Constants for the Tasmota MiElHVAC integration.
 """
 from homeassistant.components.climate import HVACMode, HVACAction
 
-DOMAIN = "mielhvac_tasmota"
+DOMAIN = "tasmota_mielhvac"
 
 # Default values
 DEFAULT_MODEL = "MiElHVAC"
