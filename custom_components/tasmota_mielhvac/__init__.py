@@ -13,7 +13,7 @@ from homeassistant.const import Platform
 from homeassistant.components import mqtt
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
-DOMAIN = "mielhvac_tasmota"
+DOMAIN = "tasmota_mielhvac"
 PLATFORMS = [Platform.CLIMATE]
 
 DISCOVERY_TOPIC = "tele/+/HVACSETTINGS"
