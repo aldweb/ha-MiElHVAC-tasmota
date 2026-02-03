@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Enable Tasmota MiElHVAC Auto-Discovery",
-        "description": "This will automatically discover HVAC devices publishing to tele/+/HVACSETTINGS and create climate entities."
+        "description": "This will automatically discover HVAC devices publishing to tele/+/SENSOR and create climate entities."
       }
     },
     "abort": {
