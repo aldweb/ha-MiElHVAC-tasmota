@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Activer la découverte automatique Tasmota MiElHVAC",
-        "description": "Cela découvrira automatiquement les appareils HVAC publiant sur tele/+/HVACSETTINGS et créera des entités climatisation."
+        "description": "Cela découvrira automatiquement les appareils HVAC publiant sur tele/+/SENSOR et créera des entités climatisation."
       }
     },
     "abort": {
