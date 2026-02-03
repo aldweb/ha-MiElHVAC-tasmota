@@ -1,6 +1,6 @@
 """
 Climate platform for Tasmota MiElHVAC integration.
-Auto-created entities based on MQTT discovery.
+Auto-created entities based on MQTT MiElHVAC detection.
 """
 from __future__ import annotations
 import json
@@ -24,7 +24,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers import device_registry as dr
 
 from .const import (
     DOMAIN,
@@ -81,7 +80,7 @@ async def async_setup_entry(
 
 
 class MiElHVACTasmota(ClimateEntity, RestoreEntity):
-    """Climate entity auto-created from MQTT discovery."""
+    """Climate entity for Mitsubishi Electric heat pump via Tasmota MiElHVAC."""
 
     def __init__(self, hass: HomeAssistant, device_id: str) -> None:
         """Initialize the climate device."""
@@ -100,109 +99,21 @@ class MiElHVACTasmota(ClimateEntity, RestoreEntity):
         self._topic_cmd_swing_h = f"cmnd/{self._base_topic}/HVACSetSwingH"
         self._topic_cmd_fan = f"cmnd/{self._base_topic}/HVACSetFanSpeed"
         
-        # Find existing Tasmota device by looking for related entities
-        device_registry = dr.async_get(hass)
-        from homeassistant.helpers import entity_registry as er
-        entity_reg = er.async_get(hass)
-        
-        existing_device = None
-        
-        _LOGGER.info("=" * 60)
-        _LOGGER.info("Searching for device with topic: %s", self._device_id)
-        
-        # Extract the topic part (e.g., "wPac1" from "tasmota_wPac1")
-        topic_short = self._device_id.replace("tasmota_", "")
-        
-        # Search for entities that match our topic
-        # Look for entity_ids like: sensor.wpac_1_*, sensor.wPac1_*, etc.
-        search_patterns = [
-            topic_short.lower(),  # wpac1
-            topic_short.lower().replace("w", "w_"),  # w_pac1
-            topic_short.replace("_", " ").lower(),  # wpac 1
-        ]
-        
-        _LOGGER.info("Searching for entities matching patterns: %s", search_patterns)
-        
-        matching_entities = []
-        for entity in entity_reg.entities.values():
-            entity_id_lower = entity.entity_id.lower()
-            # Check if entity_id contains our topic patterns
-            for pattern in search_patterns:
-                if pattern in entity_id_lower:
-                    matching_entities.append({
-                        "entity_id": entity.entity_id,
-                        "device_id": entity.device_id,
-                        "platform": entity.platform,
-                    })
-                    break
-        
-        _LOGGER.info("Found %d entities matching our topic:", len(matching_entities))
-        for ent in matching_entities[:5]:  # Log first 5
-            _LOGGER.info("  - %s (platform: %s, device: %s)", 
-                        ent["entity_id"], ent["platform"], ent["device_id"])
-        
-        # Find the device that has the most matching entities
-        device_entity_count = {}
-        for ent in matching_entities:
-            if ent["device_id"]:
-                device_entity_count[ent["device_id"]] = device_entity_count.get(ent["device_id"], 0) + 1
-        
-        if device_entity_count:
-            # Get device with most entities
-            best_device_id = max(device_entity_count, key=device_entity_count.get)
-            existing_device = device_registry.devices.get(best_device_id)
-            
-            if existing_device:
-                _LOGGER.info("✓ MATCH by entities! Device: %s (%d matching entities)",
-                            existing_device.name or existing_device.name_by_user,
-                            device_entity_count[best_device_id])
-                _LOGGER.info("  Device identifiers: %s", list(existing_device.identifiers))
-        
-        if not existing_device:
-            _LOGGER.warning("✗ NO MATCH - Device not found")
-        
-        _LOGGER.info("=" * 60)
-        
-        # Determine entity name and device info
-        if existing_device:
-            # Use device's actual name
-            device_name = (
-                existing_device.name_by_user 
-                or existing_device.name 
-                or self._device_id
-            )
-            
-            # Attach to existing Tasmota device using exact same identifiers
-            self._attr_device_info = {
-                "identifiers": existing_device.identifiers,
-            }
-        else:
-            # Device not found - create standalone with a proper name
-            # Extract readable name from topic ID
-            # tasmota_wPac1 -> wPac1 -> WPAC1
-            clean_name = self._device_id.replace("tasmota_", "")
-            device_name = clean_name
-            
-            _LOGGER.warning(
-                "Creating standalone climate entity for %s with name '%s'",
-                self._device_id,
-                device_name
-            )
-            
-            # Fallback: create minimal device info
-            self._attr_device_info = {
-                "identifiers": {("tasmota", self._device_id)},
-                "name": f"{clean_name}",  # Don't add "HVAC" prefix to device name
-                "manufacturer": "Tasmota",
-                "model": "MiElHVAC",
-            }
-        
-        # Entity configuration - CRITICAL: set name before entity is registered
-        self._attr_unique_id = f"{self._device_id}_climate"
-        self._attr_name = f"{device_name} Climate"
+        # Entity configuration
+        self._attr_unique_id = f"{self._device_id}_mielhvac_climate"
+        self._attr_name = f"{self._device_id} Climate"
         self._attr_has_entity_name = False
         
-        _LOGGER.info("Entity will be named: '%s'", self._attr_name)
+        # Create standalone device
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"{self._device_id} MiElHVAC",
+            "manufacturer": "Mitsubishi Electric",
+            "model": "Heat Pump (MiElHVAC)",
+            "via_device": (DOMAIN, "mqtt"),
+        }
+        
+        _LOGGER.info("Climate entity '%s' will be created", self._attr_name)
         
         # Temperature configuration
         self._attr_temperature_unit = UnitOfTemperature.CELSIUS
