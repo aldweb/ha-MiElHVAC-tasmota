@@ -1,6 +1,7 @@
 """
 Tasmota MiElHVAC integration for Home Assistant.
-Auto-discovers HVAC devices via MQTT SENSOR messages.
+Auto-discovers HVAC devices via MQTT SENSOR messages and Tasmota discovery.
+Uses Tasmota native discovery to get MAC address directly.
 """
 from __future__ import annotations
 import logging
@@ -18,6 +19,8 @@ PLATFORMS = [Platform.CLIMATE]
 
 # Listen to SENSOR topic to detect MiElHVAC devices
 DISCOVERY_TOPIC = "tele/+/SENSOR"
+# Listen to Tasmota discovery for MAC addresses
+TASMOTA_DISCOVERY_TOPIC = "tasmota/discovery/+/config"
 SIGNAL_HVAC_DISCOVERED = f"{DOMAIN}_hvac_discovered"
 
 _LOGGER = logging.getLogger(__name__)
@@ -28,10 +31,64 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
         "discovered_devices": {},
-        "unsub": None,
+        "tasmota_devices": {},  # Store Tasmota discovery data (MAC, etc.)
+        "unsub": [],
     }
     
-    # Start MQTT discovery
+    # Callback for Tasmota discovery messages
+    @callback
+    async def tasmota_discovery_received(msg):
+        """Handle Tasmota discovery messages to extract MAC and topic."""
+        try:
+            # Parse payload
+            try:
+                payload = json.loads(msg.payload)
+            except json.JSONDecodeError:
+                return
+            
+            # Extract MAC and topic
+            mac = payload.get("mac")
+            topic = payload.get("t")  # Topic du device
+            
+            if not mac or not topic:
+                return
+            
+            # Store Tasmota device info
+            tasmota_devices = hass.data[DOMAIN][entry.entry_id]["tasmota_devices"]
+            tasmota_devices[topic] = {
+                "mac": mac,
+                "device_name": payload.get("dn"),
+                "model": payload.get("md"),
+                "ip": payload.get("ip"),
+            }
+            
+            _LOGGER.debug(
+                "Stored Tasmota device info: %s (MAC: %s)",
+                topic,
+                mac
+            )
+            
+            # If we already discovered this device as MiElHVAC, signal with MAC
+            discovered = hass.data[DOMAIN][entry.entry_id]["discovered_devices"]
+            if topic in discovered and not discovered[topic].get("mac"):
+                discovered[topic]["mac"] = mac
+                _LOGGER.info(
+                    "✅ Linked MiElHVAC device %s to MAC %s via Tasmota discovery",
+                    topic,
+                    mac
+                )
+                # Re-signal discovery with MAC now available
+                async_dispatcher_send(
+                    hass,
+                    SIGNAL_HVAC_DISCOVERED,
+                    topic,
+                    mac,
+                )
+            
+        except Exception as err:
+            _LOGGER.error("Error processing Tasmota discovery: %s", err)
+    
+    # Callback for SENSOR messages
     @callback
     async def sensor_message_received(msg):
         """Handle SENSOR messages for MiElHVAC discovery."""
@@ -51,7 +108,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 return
             
             # Check if this is a MiElHVAC device
-            # Look for MiElHVAC key in the payload
             if "MiElHVAC" not in payload:
                 return
             
@@ -66,13 +122,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if device_id in discovered:
                 return
             
-            _LOGGER.info("🎯 Discovered MiElHVAC device: %s (Temperature: %s°C)", 
-                        device_id, mielhvac_data.get("Temperature"))
+            # Get MAC from Tasmota discovery if available
+            tasmota_devices = hass.data[DOMAIN][entry.entry_id]["tasmota_devices"]
+            mac = tasmota_devices.get(device_id, {}).get("mac")
+            
+            _LOGGER.info(
+                "🎯 Discovered MiElHVAC device: %s (Temperature: %s°C)%s",
+                device_id,
+                mielhvac_data.get("Temperature"),
+                f" with MAC {mac}" if mac else ""
+            )
             
             # Mark as discovered
             discovered[device_id] = {
                 "device_id": device_id,
                 "base_topic": device_id,
+                "mac": mac,  # May be None if Tasmota discovery not received yet
             }
             
             # Signal discovery to climate platform
@@ -80,22 +145,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 hass,
                 SIGNAL_HVAC_DISCOVERED,
                 device_id,
+                mac,  # Pass MAC (may be None)
             )
             
         except Exception as err:
             _LOGGER.error("Error processing MiElHVAC discovery: %s", err)
     
+    # Subscribe to Tasmota discovery topic
+    unsub_tasmota = await mqtt.async_subscribe(
+        hass,
+        TASMOTA_DISCOVERY_TOPIC,
+        tasmota_discovery_received,
+        qos=1,
+    )
+    
     # Subscribe to SENSOR topic
-    unsub = await mqtt.async_subscribe(
+    unsub_sensor = await mqtt.async_subscribe(
         hass,
         DISCOVERY_TOPIC,
         sensor_message_received,
         qos=1,
     )
     
-    hass.data[DOMAIN][entry.entry_id]["unsub"] = unsub
+    hass.data[DOMAIN][entry.entry_id]["unsub"] = [unsub_tasmota, unsub_sensor]
     
-    _LOGGER.info("Listening for MiElHVAC devices on topic: %s", DISCOVERY_TOPIC)
+    _LOGGER.info("Listening for Tasmota discovery on: %s", TASMOTA_DISCOVERY_TOPIC)
+    _LOGGER.info("Listening for MiElHVAC devices on: %s", DISCOVERY_TOPIC)
     
     # Forward to climate platform
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -106,8 +181,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     # Unsubscribe from MQTT
-    if hass.data[DOMAIN][entry.entry_id]["unsub"]:
-        hass.data[DOMAIN][entry.entry_id]["unsub"]()
+    for unsub in hass.data[DOMAIN][entry.entry_id]["unsub"]:
+        unsub()
     
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
