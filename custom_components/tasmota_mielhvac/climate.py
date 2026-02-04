@@ -54,21 +54,26 @@ async def async_setup_entry(
     created_entities = {}
     
     @callback
-    def async_discover_hvac(device_id: str, mac: str | None = None):
+    def async_discover_hvac(device_id: str, mac: str | None = None, device_name: str | None = None):
         """Handle discovery of a new HVAC device."""
         if device_id in created_entities:
-            # If MAC is now available, update the entity
-            if mac and created_entities[device_id]._mac_address != mac:
+            # If MAC or name is now available, update the entity
+            entity = created_entities[device_id]
+            if mac and entity._mac_address != mac:
                 _LOGGER.info("Updating MAC for %s: %s", device_id, mac)
-                created_entities[device_id]._set_mac_address(mac)
+                entity._set_mac_address(mac)
+            if device_name and entity._device_name != device_name:
+                _LOGGER.info("Updating device name for %s: %s", device_id, device_name)
+                entity._set_device_name(device_name)
             return
         
-        _LOGGER.info("Creating climate entity for %s%s", 
+        _LOGGER.info("Creating climate entity for %s%s%s", 
                     device_id,
-                    f" with MAC {mac}" if mac else "")
+                    f" with MAC {mac}" if mac else "",
+                    f" named '{device_name}'" if device_name else "")
         
-        # Create entity with MAC if available
-        entity = MiElHVACTasmota(hass, device_id, mac)
+        # Create entity with MAC and name if available
+        entity = MiElHVACTasmota(hass, device_id, mac, device_name)
         created_entities[device_id] = entity
         
         # Add to Home Assistant
@@ -87,13 +92,14 @@ async def async_setup_entry(
 class MiElHVACTasmota(ClimateEntity, RestoreEntity):
     """Climate entity for Mitsubishi Electric heat pump via Tasmota MiElHVAC."""
 
-    def __init__(self, hass: HomeAssistant, device_id: str, mac: str | None = None) -> None:
+    def __init__(self, hass: HomeAssistant, device_id: str, mac: str | None = None, device_name: str | None = None) -> None:
         """Initialize the climate device."""
         self.hass = hass
         self._device_id = device_id
         self._base_topic = device_id
         self._model = DEFAULT_MODEL
         self._mac_address = mac  # MAC may be provided directly or retrieved later
+        self._device_name = device_name  # Device name from Tasmota discovery
         
         # Dynamic MQTT topics
         self._topic_avail = f"tele/{self._base_topic}/LWT"
@@ -186,6 +192,19 @@ class MiElHVACTasmota(ClimateEntity, RestoreEntity):
         self._publish_mqtt_discovery()
         self.async_write_ha_state()
 
+    def _set_device_name(self, device_name: str):
+        """Set device name and republish discovery (called when name becomes available)."""
+        if self._device_name == device_name:
+            return
+            
+        self._device_name = device_name
+        _LOGGER.info("Device name set for %s: %s", self._device_id, device_name)
+        
+        # Republish discovery with updated name
+        if self._mac_address:
+            self._publish_mqtt_discovery()
+        self.async_write_ha_state()
+
     async def _request_device_info(self):
         """Request device info to get MAC address for device linking."""
         try:
@@ -209,6 +228,9 @@ class MiElHVACTasmota(ClimateEntity, RestoreEntity):
         # Remove colons from MAC address for device identifier
         mac_clean = self._mac_address.replace(":", "").upper()
         
+        # Use device_name from Tasmota if available, otherwise use device_id
+        device_display_name = self._device_name if self._device_name else self._device_id
+        
         # Create discovery config following Home Assistant MQTT Climate discovery format
         discovery_topic = f"homeassistant/climate/{mac_clean}_mielhvac/config"
         
@@ -217,7 +239,7 @@ class MiElHVACTasmota(ClimateEntity, RestoreEntity):
             "unique_id": f"{mac_clean}_mielhvac_climate",
             "device": {
                 "connections": [["mac", mac_clean]],
-                "name": f"{self._device_id}",
+                "name": device_display_name,  # Use Tasmota device name
                 "manufacturer": "Tasmota",
                 "model": "MiElHVAC",
             },
