@@ -2,12 +2,20 @@
   "config": {
     "step": {
       "user": {
-        "title": "Enable Tasmota MiElHVAC Auto-Discovery",
-        "description": "This will automatically discover HVAC devices publishing to tele/+/SENSOR and create climate entities."
+        "title": "Set up Tasmota MiElHVAC",
+        "description": "This integration will automatically discover Mitsubishi Electric HVAC devices controlled by Tasmota's MiElHVAC driver.\n\nDevices publishing MiElHVAC data to `tele/+/SENSOR` will be detected and linked to their Tasmota devices."
       }
     },
     "abort": {
       "single_instance_allowed": "Only one instance is allowed. HVAC devices will be discovered automatically."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Tasmota MiElHVAC Options",
+        "description": "Configure advanced options for the integration."
+      }
     }
   }
 }
