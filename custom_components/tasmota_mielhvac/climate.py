@@ -1,6 +1,6 @@
 """
 Climate platform for Tasmota MiElHVAC integration.
-Auto-created entities based on MQTT MiElHVAC detection.
+Auto-created entities based on MQTT MiElHVAC detection, linked to Tasmota devices.
 """
 from __future__ import annotations
 import json
@@ -54,16 +54,21 @@ async def async_setup_entry(
     created_entities = {}
     
     @callback
-    def async_discover_hvac(device_id: str):
+    def async_discover_hvac(device_id: str, mac: str | None = None):
         """Handle discovery of a new HVAC device."""
         if device_id in created_entities:
-            _LOGGER.debug("HVAC device %s already created", device_id)
+            # If MAC is now available, update the entity
+            if mac and created_entities[device_id]._mac_address != mac:
+                _LOGGER.info("Updating MAC for %s: %s", device_id, mac)
+                created_entities[device_id]._set_mac_address(mac)
             return
         
-        _LOGGER.info("Creating climate entity for %s", device_id)
+        _LOGGER.info("Creating climate entity for %s%s", 
+                    device_id,
+                    f" with MAC {mac}" if mac else "")
         
-        # Create entity
-        entity = MiElHVACTasmota(hass, device_id)
+        # Create entity with MAC if available
+        entity = MiElHVACTasmota(hass, device_id, mac)
         created_entities[device_id] = entity
         
         # Add to Home Assistant
@@ -82,108 +87,44 @@ async def async_setup_entry(
 class MiElHVACTasmota(ClimateEntity, RestoreEntity):
     """Climate entity for Mitsubishi Electric heat pump via Tasmota MiElHVAC."""
 
-    def __init__(self, hass: HomeAssistant, device_id: str) -> None:
+    def __init__(self, hass: HomeAssistant, device_id: str, mac: str | None = None) -> None:
         """Initialize the climate device."""
         self.hass = hass
         self._device_id = device_id
         self._base_topic = device_id
         self._model = DEFAULT_MODEL
+        self._mac_address = mac  # MAC may be provided directly or retrieved later
         
         # Dynamic MQTT topics
         self._topic_avail = f"tele/{self._base_topic}/LWT"
         self._topic_sensor = f"tele/{self._base_topic}/SENSOR"
         self._topic_state = f"tele/{self._base_topic}/HVACSETTINGS"
+        self._topic_status1 = f"stat/{self._base_topic}/STATUS1"  # Pour récupérer le MAC si pas fourni
         self._topic_cmd_mode = f"cmnd/{self._base_topic}/HVACSetHAMode"
         self._topic_cmd_temp = f"cmnd/{self._base_topic}/HVACSetTemp"
         self._topic_cmd_swing_v = f"cmnd/{self._base_topic}/HVACSetSwingV"
         self._topic_cmd_swing_h = f"cmnd/{self._base_topic}/HVACSetSwingH"
         self._topic_cmd_fan = f"cmnd/{self._base_topic}/HVACSetFanSpeed"
         
-        # Try to find existing Tasmota device
-        from homeassistant.helpers import device_registry as dr, entity_registry as er
-        
-        device_registry = dr.async_get(hass)
-        entity_registry = er.async_get(hass)
-        
-        existing_device = None
-        device_name = None
-        
-        _LOGGER.info("=" * 60)
-        _LOGGER.info("Looking for Tasmota device: %s", device_id)
-        
-        # Search for Tasmota entities that might belong to this device
-        # The entity_id often contains the topic in some form
-        topic_variations = [
-            device_id.lower(),  # tasmota_wpac1
-            device_id.replace("tasmota_", "").lower(),  # wpac1
-            device_id.replace("_", " ").lower(),  # tasmota wpac1
-            device_id.replace("tasmota_", "").replace("_", " ").lower(),  # wpac1
-        ]
-        
-        _LOGGER.info("Searching for Tasmota entities with patterns: %s", topic_variations)
-        
-        # Find Tasmota platform entities
-        candidate_devices = {}
-        for entity in entity_registry.entities.values():
-            # Only check Tasmota entities
-            if entity.platform != "tasmota":
-                continue
-            
-            entity_id_lower = entity.entity_id.lower()
-            
-            # Check if entity matches our topic
-            for variation in topic_variations:
-                if variation in entity_id_lower:
-                    if entity.device_id:
-                        if entity.device_id not in candidate_devices:
-                            candidate_devices[entity.device_id] = []
-                        candidate_devices[entity.device_id].append(entity.entity_id)
-                    break
-        
-        _LOGGER.info("Found %d candidate Tasmota devices", len(candidate_devices))
-        
-        # Select device with most matching entities
-        if candidate_devices:
-            best_device_id = max(candidate_devices, key=lambda x: len(candidate_devices[x]))
-            existing_device = device_registry.devices.get(best_device_id)
-            
-            if existing_device:
-                device_name = existing_device.name_by_user or existing_device.name
-                _LOGGER.info("✓ Found Tasmota device: %s", device_name)
-                _LOGGER.info("  Matching entities (%d): %s", 
-                           len(candidate_devices[best_device_id]),
-                           candidate_devices[best_device_id][:3])
-                _LOGGER.info("  Device identifiers: %s", list(existing_device.identifiers))
-        
-        if not existing_device:
-            _LOGGER.info("✗ No existing Tasmota device found, creating standalone")
-        
-        _LOGGER.info("=" * 60)
-        
-        # Configure entity
-        if existing_device:
-            # Attach to existing Tasmota device
-            self._attr_device_info = {
-                "identifiers": existing_device.identifiers,
-            }
-            self._attr_name = "Climate"
-            self._attr_has_entity_name = True
-            
-            _LOGGER.info("Attaching to device '%s' as 'Climate'", device_name)
-        else:
-            # Create standalone device
-            self._attr_device_info = {
-                "identifiers": {(DOMAIN, self._device_id)},
-                "name": f"{self._device_id} MiElHVAC",
-                "manufacturer": "Mitsubishi Electric",
-                "model": "Heat Pump (MiElHVAC)",
-            }
-            self._attr_name = f"{self._device_id} Climate"
-            self._attr_has_entity_name = False
-            
-            _LOGGER.info("Creating standalone device")
-        
+        # Entity configuration
         self._attr_unique_id = f"{self._device_id}_mielhvac_climate"
+        self._attr_name = f"{self._device_id} MiElHVAC"
+        self._attr_has_entity_name = True
+        
+        # Device info - set immediately if MAC is available
+        if self._mac_address:
+            mac_clean = self._mac_address.replace(":", "").upper()
+            self._attr_device_info = {
+                "connections": {("mac", mac_clean)},
+            }
+            _LOGGER.info("Climate entity '%s' initialized with MAC %s", 
+                        self._attr_name, self._mac_address)
+        else:
+            self._attr_device_info = None
+            _LOGGER.info("Climate entity '%s' will request MAC from device", 
+                        self._attr_name)
+        
+        _LOGGER.info("Climate entity '%s' will be created", self._attr_name)
         
         # Temperature configuration
         self._attr_temperature_unit = UnitOfTemperature.CELSIUS
@@ -216,6 +157,112 @@ class MiElHVACTasmota(ClimateEntity, RestoreEntity):
         
         # Subscription tracking
         self._sub_state = None
+        
+        # Request device info only if MAC not provided
+        if not self._mac_address:
+            hass.async_create_task(self._request_device_info())
+        else:
+            # Publish discovery immediately if MAC available
+            hass.async_create_task(self._publish_mqtt_discovery_delayed())
+
+    async def _publish_mqtt_discovery_delayed(self):
+        """Publish MQTT discovery after a short delay to ensure HA is ready."""
+        import asyncio
+        await asyncio.sleep(2)  # Small delay to ensure entity is registered
+        self._publish_mqtt_discovery()
+
+    def _set_mac_address(self, mac: str):
+        """Set MAC address and publish discovery (called when MAC becomes available)."""
+        if self._mac_address == mac:
+            return
+            
+        self._mac_address = mac
+        mac_clean = mac.replace(":", "").upper()
+        self._attr_device_info = {
+            "connections": {("mac", mac_clean)},
+        }
+        
+        _LOGGER.info("MAC address set for %s: %s", self._device_id, mac)
+        self._publish_mqtt_discovery()
+        self.async_write_ha_state()
+
+    async def _request_device_info(self):
+        """Request device info to get MAC address for device linking."""
+        try:
+            await mqtt.async_publish(
+                self.hass,
+                f"cmnd/{self._base_topic}/Status",
+                "1",
+                qos=1,
+                retain=False,
+            )
+            _LOGGER.debug("Requested Status 1 from %s", self._device_id)
+        except Exception as err:
+            _LOGGER.warning("Failed to request device info for %s: %s", self._device_id, err)
+
+    def _publish_mqtt_discovery(self):
+        """Publish MQTT discovery message to link this climate entity to the Tasmota device."""
+        if not self._mac_address:
+            _LOGGER.warning("Cannot publish discovery without MAC address for %s", self._device_id)
+            return
+        
+        # Remove colons from MAC address for device identifier
+        mac_clean = self._mac_address.replace(":", "").upper()
+        
+        # Create discovery config following Home Assistant MQTT Climate discovery format
+        discovery_topic = f"homeassistant/climate/{mac_clean}_mielhvac/config"
+        
+        config = {
+            "name": "HVAC",
+            "unique_id": f"{mac_clean}_mielhvac_climate",
+            "device": {
+                "connections": [["mac", mac_clean]],
+                "name": f"{self._device_id}",
+                "manufacturer": "Tasmota",
+                "model": "MiElHVAC",
+            },
+            "availability_topic": self._topic_avail,
+            "payload_available": "Online",
+            "payload_not_available": "Offline",
+            # Temperature
+            "temperature_command_topic": self._topic_cmd_temp,
+            "temperature_state_topic": self._topic_state,
+            "temperature_state_template": "{{ value_json.Temp }}",
+            "current_temperature_topic": self._topic_sensor,
+            "current_temperature_template": f"{{{{ value_json.{self._model}.Temperature }}}}",
+            "min_temp": MIN_TEMP,
+            "max_temp": MAX_TEMP,
+            "temp_step": TEMP_STEP,
+            "precision": PRECISION,
+            # Mode
+            "mode_command_topic": self._topic_cmd_mode,
+            "mode_state_topic": self._topic_state,
+            "mode_state_template": "{% set modes = {'off': 'off', 'auto': 'auto', 'cool': 'cool', 'dry': 'dry', 'heat': 'heat', 'fan_only': 'fan_only'} %}{{ modes[value_json.HAMode] if value_json.HAMode in modes else 'off' }}",
+            "modes": ["off", "auto", "cool", "dry", "heat", "fan_only"],
+            # Fan
+            "fan_mode_command_topic": self._topic_cmd_fan,
+            "fan_mode_state_topic": self._topic_state,
+            "fan_mode_state_template": "{{ value_json.FanSpeed }}",
+            "fan_modes": FAN_MODES,
+            # Swing
+            "swing_mode_command_topic": self._topic_cmd_swing_v,
+            "swing_mode_state_topic": self._topic_state,
+            "swing_mode_state_template": "{{ value_json.SwingV }}",
+            "swing_modes": SWING_V_MODES,
+        }
+        
+        # Publish discovery message
+        self.hass.async_create_task(
+            mqtt.async_publish(
+                self.hass,
+                discovery_topic,
+                json.dumps(config),
+                qos=1,
+                retain=True,
+            )
+        )
+        
+        _LOGGER.info("Published MQTT discovery for %s (MAC: %s)", self._device_id, mac_clean)
 
     async def async_added_to_hass(self) -> None:
         """Subscribe to MQTT topics when added to hass."""
@@ -286,6 +333,39 @@ class MiElHVACTasmota(ClimateEntity, RestoreEntity):
             except (json.JSONDecodeError, ValueError, KeyError) as err:
                 _LOGGER.debug("Error parsing state for %s: %s", self._device_id, err)
         
+        @callback
+        def info_received(msg: ReceiveMessage):
+            """Handle STATUS1 messages to extract MAC address."""
+            try:
+                data = json.loads(msg.payload)
+                
+                # Try different possible locations for MAC address
+                mac = None
+                
+                # StatusNET format (réponse à Status 1)
+                if "StatusNET" in data and "Mac" in data["StatusNET"]:
+                    mac = data["StatusNET"]["Mac"]
+                # Direct Mac field (fallback)
+                elif "Mac" in data:
+                    mac = data["Mac"]
+                
+                if mac and not self._mac_address:
+                    self._mac_address = mac
+                    _LOGGER.info("Got MAC address for %s: %s", self._device_id, mac)
+                    
+                    # Update device info with MAC-based identifier
+                    mac_clean = mac.replace(":", "").upper()
+                    self._attr_device_info = {
+                        "connections": {("mac", mac_clean)},
+                    }
+                    
+                    # Publish MQTT discovery to link to Tasmota device
+                    self._publish_mqtt_discovery()
+                    
+                    self.async_write_ha_state()
+            except (json.JSONDecodeError, ValueError, KeyError) as err:
+                _LOGGER.debug("Error parsing info for %s: %s", self._device_id, err)
+        
         # Subscribe to all topics
         self._sub_state = subscription.async_prepare_subscribe_topics(
             self.hass,
@@ -306,6 +386,11 @@ class MiElHVACTasmota(ClimateEntity, RestoreEntity):
                     "msg_callback": state_received,
                     "qos": 1,
                 },
+                "info": {
+                    "topic": self._topic_status1,
+                    "msg_callback": info_received,
+                    "qos": 1,
+                },
             },
         )
         await subscription.async_subscribe_topics(self.hass, self._sub_state)
@@ -315,6 +400,18 @@ class MiElHVACTasmota(ClimateEntity, RestoreEntity):
         self._sub_state = subscription.async_unsubscribe_topics(
             self.hass, self._sub_state
         )
+        
+        # Remove MQTT discovery message
+        if self._mac_address:
+            mac_clean = self._mac_address.replace(":", "").upper()
+            discovery_topic = f"homeassistant/climate/{mac_clean}_mielhvac/config"
+            await mqtt.async_publish(
+                self.hass,
+                discovery_topic,
+                "",
+                qos=1,
+                retain=True,
+            )
 
     @property
     def available(self) -> bool:
