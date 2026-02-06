@@ -120,26 +120,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         mac = tasmota_info.get("mac")
         device_name = tasmota_info.get("device_name")
 
-        temp_raw = mielhvac_data.get("Temperature")
-        
-        try:
-            temperature = float(temp_raw)
-        except (TypeError, ValueError):
-            temperature = None
-
-        if temperature is not None:
-            _LOGGER.info(
-                "Discovered MiElHVAC device: %s (Temperature: %.1f°C)%s",
-                device_id,
-                temperature,
-                f" - {device_name}" if device_name else "",
-            )
-        else:
-            _LOGGER.info(
-                "Discovered MiElHVAC device: %s (Temperature: unknown)%s",
-                device_id,
-                f" - {device_name}" if device_name else "",
-            )
+        _LOGGER.info(
+            "Discovered MiElHVAC device: %s (Temperature: %.1f°C)%s",
+            device_id,
+            float(mielhvac_data.get("Temperature")),
+            f" - {device_name}" if device_name else "",
+        )
 
         # Mark as discovered
         discovered[device_id] = {
